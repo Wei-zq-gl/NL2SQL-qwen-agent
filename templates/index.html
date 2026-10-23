@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>股票 BI 助手</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+  <div class="app" id="app">
+    <!-- 左侧会话栏 -->
+    <aside class="sidebar">
+      <div class="sidebar-head">
+        <div class="brand">
+          <svg class="brand-logo" width="20" height="20" viewBox="0 0 24 24" fill="none">
+            <path d="M4 19V9m5 10V5m5 14v-7m5 7V3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+          <span>股票 BI</span>
+        </div>
+        <button class="icon-btn" id="collapseBtn" title="收起边栏" type="button">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none">
+            <rect x="3" y="4" width="18" height="16" rx="2.5" stroke="currentColor" stroke-width="1.8"/>
+            <path d="M9 4v16" stroke="currentColor" stroke-width="1.8"/>
+          </svg>
+        </button>
+      </div>
+
+      <button class="new-chat" id="newChatBtn" type="button">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none">
+          <path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+        </svg>
+        开启新对话
+      </button>
+
+      <div class="history" id="history"></div>
+
+      <div class="sidebar-foot">
+        <div class="user-card">
+          <div class="avatar">股</div>
+          <div class="user-meta">
+            <div class="user-name">本地用户</div>
+            <div class="user-sub">stock_history.db</div>
+          </div>
+          <svg class="user-more" width="16" height="16" viewBox="0 0 24 24" fill="none">
+            <circle cx="5" cy="12" r="1.6" fill="currentColor"/>
+            <circle cx="12" cy="12" r="1.6" fill="currentColor"/>
+            <circle cx="19" cy="12" r="1.6" fill="currentColor"/>
+          </svg>
+        </div>
+      </div>
+    </aside>
+
+    <!-- 右侧对话区 -->
+    <main class="main empty" id="main">
+      <button class="icon-btn expand-btn" id="expandBtn" title="展开边栏" type="button">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none">
+          <rect x="3" y="4" width="18" height="16" rx="2.5" stroke="currentColor" stroke-width="1.8"/>
+          <path d="M9 4v16" stroke="currentColor" stroke-width="1.8"/>
+        </svg>
+      </button>
+
+      <div class="chat-area" id="chatArea">
+        <div class="hero" id="hero">
+          <svg class="hero-logo" width="28" height="28" viewBox="0 0 24 24" fill="none">
+            <circle cx="12" cy="12" r="11" fill="currentColor" opacity="0.12"/>
+            <path d="M6 16V9m4 7V6m4 10v-4m4 4V4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+          <h1>你好，有什么我能帮你的吗？</h1>
+        </div>
+        <div class="messages" id="messages"></div>
+      </div>
+
+      <div class="composer-wrap">
+        <form class="composer" id="composer">
+          <textarea id="input" rows="1" placeholder="给股票行情助手发送消息"></textarea>
+          <div class="composer-bar">
+            <div class="pills">
+              <button type="button" class="pill" id="suggestionBtn">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
+                  <path d="M12 3l1.9 4.6L18.5 9.5l-4.6 1.9L12 16l-1.9-4.6L5.5 9.5l4.6-1.9L12 3z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
+                </svg>
+                示例问题
+              </button>
+              <div class="suggest-pop" id="suggestPop" hidden></div>
+            </div>
+            <div class="composer-actions">
+              <button type="submit" class="send-btn" id="sendBtn" disabled title="发送">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+                  <path d="M12 19V5m0 0l-6 6m6-6l6 6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+              </button>
+            </div>
+          </div>
+        </form>
+        <div class="composer-tip">内容由 AI 生成，请核对查询结果</div>
+      </div>
+    </main>
+  </div>
+
+  <script>
+    window.SUGGESTIONS = {{ suggestions | tojson }};
+  </script>
+  <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>

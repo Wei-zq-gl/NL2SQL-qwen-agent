@@ -154,8 +154,8 @@ class ExcSQLTool(BaseTool):
 
         # 生成图表
         generate_chart_png(df, save_path)
-        img_path = os.path.join('image_show', filename)
-        img_md = f'![图表]({img_path})'
+        # markdown 图片地址统一用正斜杠，避免 Windows 反斜杠在浏览器中无法解析
+        img_md = f'![图表](image_show/{filename})'
         return f"{md}\n\n{img_md}"
 
 
