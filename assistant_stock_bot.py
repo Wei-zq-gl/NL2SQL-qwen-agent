@@ -26,6 +26,15 @@ import matplotlib
 matplotlib.use('Agg')  # 使用非交互式后端，避免 WebUI 环境下的绘图报错
 import matplotlib.pyplot as plt
 
+import hashlib
+from collections import OrderedDict
+
+# ====== 冰山式上下文治理配置 ======
+MAX_PREVIEW_ROWS = 80      # 进入 LLM 上下文的最大预览行数
+MAX_PREVIEW_COLS = 12      # 进入 LLM 上下文的最大预览列数
+MAX_SESSION_CACHE = 100    # _last_df_dict 的最大缓存会话数（LRU）
+EXPORT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'exports')
+
 # 解决中文显示问题
 plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'SimSun', 'Arial Unicode MS']
 plt.rcParams['axes.unicode_minus'] = False  # 解决负号显示问题
@@ -68,8 +77,15 @@ CREATE TABLE stock_daily (
 
 我将回答用户关于股票行情相关的问题。
 
-每当 exc_sql 工具返回 markdown 表格和图片时，你必须原样输出工具返回的全部内容（包括图片 markdown），不要只总结表格，也不要省略图片。这样用户才能直接看到表格和图片。
-当查询结果只有一行数据时，不需要输出统计信息或分析说明，直接原样给出这一行数据即可。
+每当 exc_sql 工具返回内容时，请遵循以下规则：
+- 若工具返回中包含【完整数据下载】链接，说明结果已被预览截断。
+  此时你必须输出：查询结果规模、统计摘要、预览表格、【完整数据下载】链接、图片 markdown。
+  严禁尝试补全或复述完整数据，也不要凭空推测未在预览中出现的数据。
+  若用户询问的内容不在预览、统计摘要或图表覆盖范围内，请明确告知
+  “该数据未在当前展示范围内，请通过下载链接查看完整数据”，不要编造数值。
+- 若工具返回中不包含【完整数据下载】链接，说明结果完整。
+  此时应原样输出工具返回的全部内容（包括图片 markdown），不要只总结表格，也不要省略图片。
+- 当查询结果只有一行数据时，原样输出该行即可，不要额外输出统计信息或分析说明。
 """
 
 functions_desc = [
@@ -89,17 +105,38 @@ functions_desc = [
     },
 ]
 
-# ====== 会话隔离 DataFrame 存储 ======
-# 用于存储每个会话的 DataFrame，避免多用户数据串扰
-_last_df_dict = {}
+# ====== 会话隔离 DataFrame 存储（LRU 限容，避免内存泄漏） ======
+_last_df_dict = OrderedDict()
 
 
 def get_session_id(kwargs):
-    """根据 kwargs 获取当前会话的唯一 session_id，这里用 messages 的 id"""
+    """基于 messages 内容生成稳定会话指纹，避免 id(messages) 回收复用导致串会话。"""
     messages = kwargs.get('messages')
-    if messages is not None:
-        return id(messages)
-    return None
+    if not messages:
+        return None
+    first_user = None
+    for m in messages:
+        if m.get('role') == 'user':
+            first_user = m
+            break
+    if first_user is None:
+        return None
+    content = first_user.get('content', '')
+    if isinstance(content, str):
+        seed = content
+    else:
+        seed = ''.join(p.get('text', '') for p in content if isinstance(p, dict))
+    return hashlib.md5(f"{seed}|{len(messages)}".encode('utf-8')).hexdigest()[:16]
+
+
+def _store_df(session_id, df):
+    """LRU 方式缓存 DataFrame，超过 MAX_SESSION_CACHE 时淘汰最旧会话。"""
+    if not session_id:
+        return
+    _last_df_dict[session_id] = df
+    _last_df_dict.move_to_end(session_id)
+    while len(_last_df_dict) > MAX_SESSION_CACHE:
+        _last_df_dict.popitem(last=False)
 
 
 # ====== exc_sql 工具类实现 ======
@@ -119,7 +156,6 @@ class ExcSQLTool(BaseTool):
     def call(self, params: str, **kwargs) -> str:
         import json
 
-        # 获取session_id用于数据隔离
         session_id = get_session_id(kwargs)
 
         args = json.loads(params)
@@ -128,35 +164,70 @@ class ExcSQLTool(BaseTool):
 
         engine = create_engine(DB_URL)
         try:
-            # 使用 SQLAlchemy 的 text() 包装 SQL 语句，避免格式化问题
-            df = pd.read_sql(text(sql_input), engine)
+            df_full = pd.read_sql(text(sql_input), engine)
         finally:
-            # 每次查询都新建 engine，用完立即释放连接池，避免连接泄漏和占用数据库文件
             engine.dispose()
-        print('df=', df)
+        print('df=', df_full)
 
-        # 将DataFrame存储到会话中
-        if session_id:
-            _last_df_dict[session_id] = df
+        _store_df(session_id, df_full)
 
-        # 返回完整查询结果给大模型，不做行数截断（图表同样使用完整数据）
-        md = df.to_markdown(index=False)
+        total_rows, total_cols = len(df_full), len(df_full.columns)
 
-        # 结果只有一行（或为空）时不做可视化，直接返回表格
-        if len(df) <= 1:
-            return md
+        # 空表 / 单行：保持原行为（不做统计、不画图）
+        if total_rows <= 1:
+            return df_full.to_markdown(index=False)
 
-        # 自动创建图片目录
-        save_dir = os.path.join(os.path.dirname(__file__), 'image_show')
+        # ① 完整数据落盘（水下 7/8）
+        os.makedirs(EXPORT_DIR, exist_ok=True)
+        ts = int(time.time() * 1000)
+        csv_name = f'export_{ts}.csv'
+        csv_path = os.path.join(EXPORT_DIR, csv_name)
+        has_csv = False
+        try:
+            df_full.to_csv(csv_path, index=False, encoding='utf-8-sig')
+            has_csv = True
+        except Exception as exc:
+            print('导出 CSV 失败:', exc)
+
+        # ② 数值列统计摘要（供 LLM 推理）
+        num_cols = df_full.select_dtypes(exclude='O').columns.tolist()
+        stat_lines = []
+        for col in num_cols[:6]:
+            series = pd.to_numeric(df_full[col], errors='coerce').dropna()
+            if len(series) == 0:
+                continue
+            stat_lines.append(
+                f"- {col}: min={series.min():.2f}, max={series.max():.2f}, "
+                f"mean={series.mean():.2f}, last={series.iloc[-1]:.2f}"
+            )
+        stats_md = "\n".join(stat_lines) if stat_lines else "（无数值列）"
+
+        # ③ 预览（露出 1/8）
+        preview = df_full.head(MAX_PREVIEW_ROWS).iloc[:, :MAX_PREVIEW_COLS]
+        preview_md = preview.to_markdown(index=False)
+        truncated = (total_rows > MAX_PREVIEW_ROWS) or (total_cols > MAX_PREVIEW_COLS)
+
+        # ④ 图表用完整 df_full（质量不变）
+        save_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'image_show')
         os.makedirs(save_dir, exist_ok=True)
-        filename = f'bar_{int(time.time() * 1000)}.png'
+        filename = f'bar_{ts}.png'
         save_path = os.path.join(save_dir, filename)
-
-        # 生成图表
-        generate_chart_png(df, save_path)
-        # markdown 图片地址统一用正斜杠，避免 Windows 反斜杠在浏览器中无法解析
+        generate_chart_png(df_full, save_path)
         img_md = f'![图表](image_show/{filename})'
-        return f"{md}\n\n{img_md}"
+
+        # ⑤ 组装返回
+        if truncated:
+            header = (f"查询结果：{total_rows} 行 × {total_cols} 列"
+                    f"（上下文仅展示前 {len(preview)} 行 × "
+                    f"{min(total_cols, MAX_PREVIEW_COLS)} 列，完整数据见下载链接）")
+        else:
+            header = f"查询结果：{total_rows} 行 × {total_cols} 列（全部）"
+
+        parts = [header, "", "【数值列统计】", stats_md, "", "【结果预览】", preview_md]
+        if truncated and has_csv:
+            parts += ["", f"【完整数据下载】[ {csv_name} ](exports/{csv_name})"]
+        parts += ["", img_md]
+        return "\n".join(parts)
 
 
 # ========== 通用可视化函数 ==========
@@ -257,6 +328,9 @@ def init_agent_service():
         'model': 'qwen-max',
         'timeout': 30,
         'retry_count': 3,
+        'generate_cfg': {
+            'max_input_tokens': 30000,  # 主动压低，让 S1–S5 截断提前介入
+        },
     }
     function_list=[
         'exc_sql',

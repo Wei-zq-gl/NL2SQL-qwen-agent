@@ -18,6 +18,7 @@ from assistant_stock_bot import init_agent_service
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 IMAGE_DIR = os.path.join(BASE_DIR, 'image_show')
+EXPORT_DIR = os.path.join(BASE_DIR, 'exports')
 
 # 首页示例问题
 SUGGESTIONS = [
@@ -35,6 +36,7 @@ _agent_lock = threading.Lock()
 # 内存会话表：session_id -> 会话数据
 _sessions = {}
 _sessions_lock = threading.Lock()
+MAX_SESSIONS = 200
 
 
 def get_agent():
@@ -57,6 +59,10 @@ def create_session():
         'turns': [],  # 用于界面回显的 user/assistant 文本
     }
     with _sessions_lock:
+        if len(_sessions) >= MAX_SESSIONS:
+            # 淘汰最旧的会话
+            oldest = min(_sessions.values(), key=lambda s: s['created_at'])
+            _sessions.pop(oldest['id'], None)
         _sessions[session['id']] = session
     return session
 
@@ -95,6 +101,10 @@ def index():
 def chart_image(filename):
     """提供 exc_sql 生成的可视化图片"""
     return send_from_directory(IMAGE_DIR, filename)
+
+@app.route('/exports/<path:filename>')            
+def export_file(filename):
+    return send_from_directory(EXPORT_DIR, filename)
 
 
 @app.route('/api/sessions')
@@ -160,12 +170,11 @@ def api_chat():
 
         messages = list(session['messages'])
         messages.append({'role': 'user', 'content': text})
-        final_messages = messages
+        response = []
         previous = ''
 
         try:
             for response in bot.run(messages):
-                final_messages = response
                 content = assistant_text(response)
                 if not content or content == previous:
                     continue
@@ -178,7 +187,8 @@ def api_chat():
             yield sse({'type': 'error', 'message': f'查询失败：{exc}'})
             return
 
-        session['messages'] = final_messages
+        messages.extend(response)
+        session['messages'] = messages
         if previous:
             session['turns'].append({'role': 'assistant', 'content': previous})
         yield sse({'type': 'done'})
