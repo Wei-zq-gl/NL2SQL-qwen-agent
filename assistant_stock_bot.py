@@ -325,7 +325,11 @@ def generate_chart_png(df_sql, save_path):
 def init_agent_service():
     """初始化股票查询助手服务"""
     llm_cfg = {
-        'model': 'qwen-max',
+        'model': 'qwen3.8-max-0902',
+        # DashScope 经典 text-generation 端点不服务 qwen3.x 系列，改走 OpenAI 兼容端点
+        'model_type': 'oai',
+        'model_server': 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+        'api_key': os.getenv('DASHSCOPE_API_KEY', ''),
         'timeout': 30,
         'retry_count': 3,
         'generate_cfg': {
