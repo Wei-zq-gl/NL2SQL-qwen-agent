@@ -1,6 +1,5 @@
 .venv/
 __pycache__/
 image_show/
-requirements.txt
 workspace/
 exports/
